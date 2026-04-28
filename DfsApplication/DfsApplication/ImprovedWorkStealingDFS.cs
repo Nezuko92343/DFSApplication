@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -20,6 +21,9 @@ namespace DfsApplication
         private static readonly ThreadLocal<Random> threadRandom =
             new ThreadLocal<Random>(() =>
                 new Random(Environment.TickCount * Thread.CurrentThread.ManagedThreadId));
+
+        private readonly ConcurrentBag<int> usedThreadIds = new ConcurrentBag<int>();
+
 
         public ImprovedWorkStealingDFS(int vertices, List<int>[] adjList)
         {
@@ -103,6 +107,10 @@ namespace DfsApplication
 
         public List<int> RunWorkStealingDfs(int start, int maxDegreeOfParallelism = -1)
         {
+            usedThreadIds.Clear();
+
+            usedThreadIds.Add(Thread.CurrentThread.ManagedThreadId);
+
             if (vertexCount < ParallelThreshold)
                 return RunSequentialDfs(start);
 
@@ -127,6 +135,7 @@ namespace DfsApplication
                 new ParallelOptions { MaxDegreeOfParallelism = workers },
                 workerId =>
                 {
+                    usedThreadIds.Add(Thread.CurrentThread.ManagedThreadId);
                     var localResult = new List<int>();
                     var rand = threadRandom.Value;
                     var spinner = new SpinWait();
@@ -216,6 +225,16 @@ namespace DfsApplication
             }
 
             return result;
+        }
+
+        public int GetUsedThreadCount()
+        {
+            return usedThreadIds.Distinct().Count();
+        }
+
+        public string GetUsedThreadDetails()
+        {
+            return string.Join(", ", usedThreadIds.Distinct().OrderBy(x => x));
         }
     }
 }
