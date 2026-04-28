@@ -20,10 +20,9 @@ namespace DfsApplication
 
         private static readonly ThreadLocal<Random> threadRandom =
             new ThreadLocal<Random>(() =>
-                new Random(Environment.TickCount * Thread.CurrentThread.ManagedThreadId));
+                new Random(Guid.NewGuid().GetHashCode()));
 
-        private readonly ConcurrentBag<int> usedThreadIds = new ConcurrentBag<int>();
-
+        private readonly ConcurrentDictionary<int, byte> usedThreadIds = new();
 
         public ImprovedWorkStealingDFS(int vertices, List<int>[] adjList)
         {
@@ -57,8 +56,8 @@ namespace DfsApplication
 
         private class WorkStealingDeque
         {
-            private readonly List<int> deque = new List<int>();
-            private readonly object locker = new object();
+            private readonly List<int> deque = new();
+            private readonly object locker = new();
 
             public void Push(int item)
             {
@@ -97,25 +96,17 @@ namespace DfsApplication
                 item = -1;
                 return false;
             }
-
-            public bool IsEmpty()
-            {
-                lock (locker)
-                    return deque.Count == 0;
-            }
         }
 
         public List<int> RunWorkStealingDfs(int start, int maxDegreeOfParallelism = -1)
         {
             usedThreadIds.Clear();
-
-            usedThreadIds.Add(Thread.CurrentThread.ManagedThreadId);
+            usedThreadIds.TryAdd(Thread.CurrentThread.ManagedThreadId, 0);
 
             if (vertexCount < ParallelThreshold)
                 return RunSequentialDfs(start);
 
             Array.Clear(visited, 0, vertexCount);
-            activeTasks = 0;
 
             int workers = maxDegreeOfParallelism > 0
                 ? maxDegreeOfParallelism
@@ -125,116 +116,87 @@ namespace DfsApplication
             var results = new List<int>[workers];
 
             for (int i = 0; i < workers; i++)
+            {
                 deques[i] = new WorkStealingDeque();
+                results[i] = new List<int>();
+            }
 
             visited[start] = 1;
+
             deques[0].Push(start);
             Interlocked.Increment(ref activeTasks);
 
-            Parallel.For(0, workers,
-                new ParallelOptions { MaxDegreeOfParallelism = workers },
-                workerId =>
+            Parallel.For(0, workers, new ParallelOptions { MaxDegreeOfParallelism = workers }, workerId =>
+            {
+                usedThreadIds.TryAdd(Thread.CurrentThread.ManagedThreadId, 0);
+
+                var localResult = results[workerId];
+                var rand = threadRandom.Value!;
+                var spinner = new SpinWait();
+
+                while (true)
                 {
-                    usedThreadIds.Add(Thread.CurrentThread.ManagedThreadId);
-                    var localResult = new List<int>();
-                    var rand = threadRandom.Value;
-                    var spinner = new SpinWait();
+                    int current;
 
-                    while (true)
+                    bool gotWork =
+                        deques[workerId].TryPop(out current) ||
+                        Steal(workers, workerId, rand, deques, out current);
+
+                    if (!gotWork)
                     {
-                        int current;
+                        if (Volatile.Read(ref activeTasks) == 0)
+                            break;
 
-                        if (!deques[workerId].TryPop(out current))
-                        {
-                            bool stolen = false;
-                            int startOffset = rand.Next(workers);
-
-                            for (int i = 0; i < workers; i++)
-                            {
-                                int victim = (startOffset + i) % workers;
-
-                                if (victim == workerId) continue;
-
-                                if (deques[victim].TrySteal(out current))
-                                {
-                                    stolen = true;
-                                    break;
-                                }
-                            }
-
-                            if (!stolen)
-                            {
-                                bool allEmpty = true;
-
-                                for (int i = 0; i < workers && allEmpty; i++)
-                                    allEmpty = deques[i].IsEmpty();
-
-                                if (Volatile.Read(ref activeTasks) == 0 && allEmpty)
-                                    break;
-
-                                spinner.SpinOnce();
-                                continue;
-                            }
-                        }
-
-                        localResult.Add(current);
-
-                        var neighbors = flatAdjacency[current];
-
-                        for (int i = neighbors.Length - 1; i >= 0; i--)
-                        {
-                            int neighbor = neighbors[i];
-
-                            if (Interlocked.CompareExchange(ref visited[neighbor], 1, 0) == 0)
-                            {
-                                Interlocked.Increment(ref activeTasks);
-                                deques[workerId].Push(neighbor);
-                            }
-                        }
-
-                        Interlocked.Decrement(ref activeTasks);
+                        spinner.SpinOnce();
+                        continue;
                     }
 
-                    results[workerId] = localResult;
-                });
+                    Interlocked.Decrement(ref activeTasks);
+
+                    localResult.Add(current);
+
+                    var neighbors = flatAdjacency[current];
+
+                    for (int i = neighbors.Length - 1; i >= 0; i--)
+                    {
+                        int neighbor = neighbors[i];
+
+                        if (Interlocked.CompareExchange(ref visited[neighbor], 1, 0) == 0)
+                        {
+                            deques[workerId].Push(neighbor);
+                            Interlocked.Increment(ref activeTasks);
+                        }
+                    }
+                }
+            });
 
             return results.SelectMany(x => x).ToList();
         }
 
-        private List<int> RunSequentialDfs(int start)
+        private bool Steal(int workers, int workerId, Random rand,
+            WorkStealingDeque[] deques, out int item)
         {
-            var visitedLocal = new bool[vertexCount];
-            var stack = new Stack<int>();
-            var result = new List<int>();
+            int startOffset = rand.Next(workers);
 
-            stack.Push(start);
-
-            while (stack.Count > 0)
+            for (int i = 0; i < workers; i++)
             {
-                int current = stack.Pop();
+                int victim = (startOffset + i) % workers;
 
-                if (visitedLocal[current]) continue;
+                if (victim == workerId)
+                    continue;
 
-                visitedLocal[current] = true;
-                result.Add(current);
-
-                var neighbors = flatAdjacency[current];
-
-                for (int i = neighbors.Length - 1; i >= 0; i--)
-                    stack.Push(neighbors[i]);
+                if (deques[victim].TrySteal(out item))
+                    return true;
             }
 
-            return result;
+            item = -1;
+            return false;
         }
 
-        public int GetUsedThreadCount()
-        {
-            return usedThreadIds.Distinct().Count();
-        }
+    
+        public int GetUsedThreadCount() => usedThreadIds.Count;
 
-        public string GetUsedThreadDetails()
-        {
-            return string.Join(", ", usedThreadIds.Distinct().OrderBy(x => x));
-        }
+        public string GetUsedThreadDetails() =>
+            string.Join(", ", usedThreadIds.Keys.OrderBy(x => x));
     }
 }
