@@ -253,7 +253,7 @@ namespace DfsApplication
         }
 
         private void TestWorkStealingDistribution()
-        {
+       {
             Console.WriteLine("\nTest 6: Work stealing distribution");
             Console.WriteLine("-".PadRight(40, '-'));
 
@@ -262,24 +262,17 @@ namespace DfsApplication
             var baseGraph = generator.GenerateConnectedGraph(vertices, edges);
 
             var parGraph = new ImprovedWorkStealingDFS(vertices, baseGraph.AdjList);
+
             var result = parGraph.RunWorkStealingDfs(0);
+            int threadsUsed = parGraph.GetUsedThreadCount();
+            string threadDetails = parGraph.GetUsedThreadDetails();
 
-            var threads = Process.GetCurrentProcess().Threads;
-            int activeThreads = 0;
-            foreach (ProcessThread thread in threads)
-            {
-                if (thread.ThreadState == System.Diagnostics.ThreadState.Running ||
-                    thread.ThreadState == System.Diagnostics.ThreadState.Wait)
-                {
-                    activeThreads++;
-                }
-            }
-
-            Console.WriteLine($"Graph: {vertices} vertices");
+            Console.WriteLine($"Graph: {vertices} vertices, {edges} edges");
             Console.WriteLine($"Processor cores: {processorCount}");
-            Console.WriteLine($"Active threads in process: {activeThreads}");
             Console.WriteLine($"Result size: {result.Count} vertices");
-            Console.WriteLine($"Conclusion: {(activeThreads > 1 ? "Work distributed across threads" : "All work in one thread")}");
+            Console.WriteLine($"Threads used by DFS: {threadsUsed}");
+            Console.WriteLine($"Thread IDs used: {threadDetails}");
+            Console.WriteLine($"Conclusion: {(threadsUsed > 1 ? "Work distributed across threads" : "All work in one thread")}");
         }
 
         private void CopyGraphToGraph(Graph source, Graph target, int vertices)
