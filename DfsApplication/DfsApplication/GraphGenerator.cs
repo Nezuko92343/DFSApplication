@@ -50,42 +50,5 @@ namespace DfsApplication
 
             return graph;
         }
-
-
-        public Graph GenerateLargeGraph(int vertices, double density)
-        {
-            
-            density = Math.Min(density, 0.01); 
-
-            long maxEdges = (long)vertices * (vertices - 1) / 2;
-            long targetEdges = (long)(maxEdges * density);
-
-            Console.WriteLine($"  Генерація графу: {vertices:N0} вершин, ~{targetEdges:N0} ребер");
-
-            var graph = new Graph(vertices);
-            var connectedList = new List<int> { 0 };
-
-            for (int i = 1; i < vertices; i++)
-            {
-                int parent = connectedList[random.Next(connectedList.Count)];
-                graph.AddEdge(parent, i);
-                graph.AddEdge(i, parent);
-                connectedList.Add(i);
-            }
-
-            int maxAdditional = Math.Min(5000000, vertices * 20); 
-            for (int i = 0; i < maxAdditional; i++)
-            {
-                int src = random.Next(vertices);
-                int dst = random.Next(vertices);
-                if (src != dst)
-                {
-                    graph.AddEdge(src, dst);
-                    graph.AddEdge(dst, src);
-                }
-            }
-
-            return graph;
-        }
     }
 }
